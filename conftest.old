@@ -1,0 +1,289 @@
+import os
+import pyautogui
+import pytest
+import shutil
+import socket
+import subprocess
+import time
+import warnings
+from pathlib import Path
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from sys import platform
+from selenium.webdriver.chrome.webdriver import WebDriver
+from editors.base_editor import Editor
+from editors.document_editor import DocumentEditor
+from editors.spreadsheet_editor import SpreadsheetEditor
+from editors.presentation_editor import PresentationEditor
+from resources import case_names
+from utils import keyboard_layout, os_platform, report_generator
+
+
+def get_args():
+    args = None
+    if platform == "linux" or platform == "linux2":
+        args = ['r7-office', '--ascdesktop-support-debug-info']
+    elif platform == "darwin":
+        args = ['/Applications/Р7-Офис923.app/Contents/MacOS/R7-Office', '--ascdesktop-support-debug-info']
+    elif platform == "win32":
+        # args = [r'D:\Program Files\R7-Office\Editors\DesktopEditors.exe', r'--ascdesktop-support-debug-info']
+        args = [os.getenv('ProgramFiles') + r'\R7-Office\Editors\DesktopEditors.exe', r'--ascdesktop-support-debug-info']
+    return args
+
+
+def wait_for_port(host, port, timeout=60):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    raise TimeoutError(f"Порт {host}:{port} не доступен после {timeout} сек.")
+
+
+@pytest.fixture(scope="function")
+def driver():
+    chromedriver = os_platform.get_driver(platform)
+    process = subprocess.Popen(get_args(), stdout=subprocess.DEVNULL)
+
+    wait_for_port("127.0.0.1", 8080)
+
+    if platform == "darwin":
+        try:
+            apple_script = '''
+                set appName to "R7-Office"
+                set timeoutSec to 30
+                set waited to 0
+    
+                tell application "System Events"
+                    repeat while (not (exists window 1 of process appName)) and waited < timeoutSec
+                        delay 0.5
+                        set waited to waited + 0.5
+                    end repeat
+                    
+                    if waited < timeoutSec then
+                        tell process appName
+                            try
+                                set position of window 1 to {0, 0}
+                                set size of window 1 to {1440, 900}
+                            on error errMsg
+                                error "Ошибка при установке окна: " & errMsg
+                            end try
+                        end tell
+                    else
+                        error "Окно не появилось за " & timeoutSec & " секунд"
+                    end if
+                end tell
+                '''
+            subprocess.run(["osascript", "-e", apple_script], check=False)
+
+        except Exception as e:
+            pytest.fail(f"Не удалось установить параметры запуска редактора: {e}")
+
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.debugger_address = 'localhost:8080'
+    # Попробуем Remote подключение
+    from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
+    from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+    capabilities = DesiredCapabilities.CHROME.copy()
+    driver = RemoteWebDriver(command_executor="http://localhost:8080", desired_capabilities=capabilities, options=options)
+
+    kb_layout = keyboard_layout.get_keyboard_layout()
+    if kb_layout == 'en-us':
+        pyautogui.hotkey('alt', 'shift')
+
+    yield driver
+
+    if platform == "linux" or platform == "linux2" or platform == "darwin":
+        driver.quit()
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    elif platform == "win32":
+        driver.close()
+        driver.quit()
+
+
+@pytest.fixture(scope="function", autouse=True)
+def clean_desktop_cache():
+    """
+    Очищает пользовательский кэш настроек редактора перед запуском
+    """
+    cache_paths = None
+
+    if platform == "linux" or platform == "linux2":
+        cache_paths = [
+            Path.home() / ".local/share/r7-office",
+            Path.home() / ".config/r7-office",
+            Path.home() / ".R7"
+        ]
+    elif platform == "darwin":
+        cache_paths = [
+            Path.home() / "Library/Application Support/ru.nkt.r7-office-signature/data/cache",
+            Path.home() / "Library/Application Support/ru.nkt.r7-office-signature/recovery",
+            Path.home() / "Library/Application Support/ru.nkt.r7-office-signature/recents.xml",
+            Path.home() / ".R7"
+        ]
+    elif platform == "win32":
+        cache_paths = [
+            Path.home() / "AppData" / "Roaming" / "R7",
+            Path.home() / "AppData" / "Local" / "R7-Office"
+        ]
+
+    yield
+
+    for path_ in cache_paths:
+        if not path_.exists():
+            continue
+
+        last_error = None
+
+        for attempt in range(3):
+            try:
+                if path_.is_dir():
+                    time.sleep(1)
+                    shutil.rmtree(path_)
+                else:
+                    path_.unlink()
+
+                if not path_.exists():
+                    break
+            except Exception as e:
+                last_error = e
+                time.sleep(1)
+        else:
+            warnings.warn(
+                f"Не удалось удалить {path_} после 3 попыток. Ошибка: {last_error}",
+                UserWarning
+            )
+
+
+@pytest.fixture(scope="package", autouse=True)
+def copy_desktop_license():
+    """
+    Копирует файл лицензии редактора перед запуском пакета тестов
+    """
+    license_path = None
+    project_root = Path(__file__).parent
+    src_file = project_root / "utils" / "license.lickey"
+
+    if platform == "linux" or platform == "linux2":
+        license_path = Path("/etc/r7-office/license")
+    elif platform == "darwin":
+        license_path = Path.home() / "Library/Application Support/ru.nkt.r7-office-signature/license"
+    elif platform == "win32":
+        license_path = Path(r"C:\ProgramData\R7-Office\License")
+
+    dst_file = license_path / "license.lickey"
+
+    try:
+        license_path.mkdir(parents=True, exist_ok=True)
+        if not dst_file.exists():
+            shutil.copy(src_file, dst_file)
+
+    except Exception as e:
+        pytest.fail(f"Не удалось скопировать лицензию: {e}")
+
+    yield
+
+
+@pytest.fixture(scope="function", autouse=True)
+def set_desktop_default_start_params():
+    """
+    Устанавливает режим максимального окна maximized и темы интерфейса theme-light редактора перед запуском
+    """
+    try:
+        if platform == "win32":
+            import winreg
+            from winreg import HKEY_CURRENT_USER
+
+            editor = winreg.CreateKey(HKEY_CURRENT_USER, r'Software\R7-Office\Editors')
+            winreg.SetValueEx(editor, "UITheme2", 0, winreg.REG_SZ, "theme-light")
+            winreg.SetValueEx(editor, "maximized", 0, winreg.REG_SZ, "False")
+            winreg.SetValueEx(editor, "position", 0, winreg.REG_SZ, "@Rect(0 0 1440 900)")
+
+        elif platform == "darwin":
+            plist_id = "ru.nkt.r7-office-signature"
+
+            subprocess.run(["killall", "cfprefsd"], check=False)
+            subprocess.run(["defaults", "write", plist_id, "asc_user_ui_theme", "theme-light"], check=True)
+
+        elif platform == "linux":
+            project_root = Path(__file__).parent
+            src_config_file = project_root / "utils" / "editors.conf"
+            dst_config_file = Path.home() / ".config" / "r7-office" / "editors.conf"
+
+            dst_config_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src_config_file, dst_config_file)
+
+    except Exception as e:
+            pytest.fail(f"Не удалось установить параметры запуска редактора: {e}")
+
+    yield
+
+
+@pytest.fixture(scope="function")
+def base_editor(driver: WebDriver):
+    editor = Editor(driver)
+    return editor
+
+
+@pytest.fixture(scope="function")
+def document_editor(driver: WebDriver, cmdopt):
+    editor = DocumentEditor(driver, cmdopt)
+    editor.new_document()
+    return editor
+
+
+@pytest.fixture(scope="function")
+def spreadsheet_editor(driver: WebDriver, cmdopt):
+    editor = SpreadsheetEditor(driver, cmdopt)
+    editor.new_spreadsheet()
+    return editor
+
+
+@pytest.fixture(scope="function")
+def presentation_editor(driver: WebDriver, cmdopt):
+    editor = PresentationEditor(driver, cmdopt)
+    editor.new_presentation()
+    return editor
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--cmdopt", action="store", default="", help="command line options"
+    )
+
+
+@pytest.fixture(scope="function")
+def cmdopt(request):
+    return request.config.getoption("--cmdopt")
+
+
+def pytest_sessionstart(session):
+    session.results = dict()
+    session.start_session = time.time()
+   #'id-about-licensor-version-name'
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+
+    outcome = yield
+    result = outcome.get_result()
+    if result.when == 'call':
+        case = item.nodeid.split("/")[1] + '/' + item.name
+        case_name = case_names.cases[case]
+        item.session.results[case_name] = result.outcome
+
+
+def pytest_sessionfinish(session, exitstatus):
+    duration = time.time() - session.start_session
+    report_generator.create_report(session.results, duration)

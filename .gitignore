@@ -1,0 +1,32 @@
+# Reports
+report/
+reports/
+
+# PyCharm-specific
+.idea/
+
+#Pytest-specific
+.pytest_cache
+
+#Ruff-specific
+.ruff_cache
+
+# Python-specific
+__pycache__/
+*.pyc
+*.egg-info/
+.Python
+venv/
+env/
+pip-log.txt
+build/
+dist/
+.venv
+
+# Operating system specific
+.DS_Store
+Thumbs.db
+
+# Drafts
+*_draft.py
+

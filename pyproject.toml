@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "r7-desktop-selenium"
+version = "0.1.0"
+description = ""
+authors = ["prokhorov <prokhorov.sergey@r7-office.ru>", "shalginov <shalginov.vaycheslav@r7-office.ru>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.13"
+selenium = "^4.35.0"
+pytest = "^8.4.1"
+pillow = "^11.3.0"
+scikit-image = "^0.25.2"
+opencv-python = "^4.12.0.88"
+pyautogui = "^0.9.54"
+pyperclip = "^1.9.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.pytest.ini_options]
+#addopts = '--collect-only -q'
+# addopts = '-rav -m "this"'
+markers = [
+    "document: tests for document editor",
+    "spreadsheet: tests for spreadsheet editor",
+    "presentation: tests for presentation editor",
+    "main_tab: tests for main tab",
+    "insert_tab: tests for insert tab",
+    "draw_tab: tests for draw tab",
+    "data_tab: tests for data tab",
+    "formula_tab: tests for formulas tab",
+    "layout_tab: tests for layout tab",
+    "links_tab: tests for links tab",
+    "pivot_table_tab: tests for pivot table tab",
+    "review_tab: tests for review tab",
+    "view_tab: tests for view tab",
+]
+
+
+[tool.ruff]
+line-length = 160
+#Добавлены пока только таблицы
+include = ["pyproject.toml", "editors/spreadsheet_editor.py", "tests/spreadsheet/**/*.py"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = false
+skip-magic-trailing-comma = true
